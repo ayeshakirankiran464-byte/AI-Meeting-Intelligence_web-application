@@ -1,0 +1,6 @@
+Flask==3.0.3
+python-dotenv==1.0.1
+Werkzeug==3.0.3
+openai==1.40.0
+huggingface_hub==0.24.5
+python-multipart==0.0.9 
