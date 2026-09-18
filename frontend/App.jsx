@@ -2,8 +2,14 @@ import React, { useEffect, useState } from "react";
 import "./style.css";
 
 function App() {
-  const API_URL = "http://127.0.0.1:5000";
+  // ==============================
+  // FastAPI Backend
+  // ==============================
+  const API_URL = "http://127.0.0.1:8000";
 
+  // ==============================
+  // State
+  // ==============================
   const [message, setMessage] = useState("Checking backend...");
   const [success, setSuccess] = useState(false);
 
@@ -11,36 +17,140 @@ function App() {
   const [transcript, setTranscript] = useState("");
 
   const [summary, setSummary] = useState("");
+  const [keyPoints, setKeyPoints] = useState([]);
+  const [decisions, setDecisions] = useState([]);
+  const [actionItems, setActionItems] = useState([]);
+  const [importantDates, setImportantDates] = useState([]);
+
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const [isSpeaking, setIsSpeaking] = useState(false);
-
+  const [asking, setAsking] = useState(false);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
-  const [asking, setAsking] = useState(false);
   const [questionError, setQuestionError] = useState("");
 
+  const [error, setError] = useState("");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  // ==============================
+  // Ask AI
+  // ==============================
+  const handleAskAI = async (event) => {
+   
+  event.preventDefault();
+
+  setQuestionError("");
+  setAnswer("");
+
+  if (!question.trim()) {
+    setQuestionError("Please enter a question.");
+    return;
+  }
+
+  if (!transcript.trim()) {
+    setQuestionError(
+      "Please analyze a meeting before asking AI."
+    );
+    return;
+  }
+
+  try {
+    setAsking(true);
+
+    console.log("Sending Ask AI request...");
+
+    const response = await fetch(
+      `${API_URL}/api/meetings/query`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: question.trim(),
+          transcript: transcript.trim(),
+          filename: selectedFile ? selectedFile.name : "pasted-transcript.txt"
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    console.log("Ask AI status:", response.status);
+    console.log("Ask AI data:", data);
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail ||
+          data.error ||
+          data.message ||
+          "Failed to get AI answer."
+      );
+    }
+
+    const aiAnswer =
+      data.answer ||
+      data.response ||
+      data.result ||
+      data.message ||
+      data.output;
+
+    if (!aiAnswer) {
+      throw new Error(
+        "FastAPI responded successfully, but no answer field was returned."
+      );
+    }
+
+    setAnswer(aiAnswer);
+  } catch (err) {
+    console.error("Ask AI error:", err);
+
+    setQuestionError(
+      err.message || "Unable to get an AI answer."
+    );
+  } finally {
+    setAsking(false);
+  }
+};
   // ==============================
   // Backend connection
   // ==============================
   useEffect(() => {
-    fetch(`${API_URL}/api/test`)
-      .then((response) => {
+    const checkBackend = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/api/test`
+        );
+
         if (!response.ok) {
-          throw new Error("Backend connection failed");
+          throw new Error(
+            "Backend connection failed"
+          );
         }
-        return response.json();
-      })
-      .then((data) => {
-        setMessage(data.message || "Backend connected");
-        setSuccess(data.success === true);
-      })
-      .catch((err) => {
-        console.error("Backend connection error:", err);
-        setMessage("Backend se connection nahi ho raha.");
+
+        const data = await response.json();
+
+        setMessage(
+          data.message || "Backend connected"
+        );
+
+        setSuccess(
+          data.success === true || response.ok
+        );
+      } catch (err) {
+        console.error(
+          "Backend connection error:",
+          err
+        );
+
+        setMessage(
+          "Backend is not available"
+        );
+
         setSuccess(false);
-      });
+      }
+    };
+
+    checkBackend();
 
     return () => {
       if ("speechSynthesis" in window) {
@@ -53,21 +163,53 @@ function App() {
   // File selection
   // ==============================
   const handleFileChange = (event) => {
-    const file = event.target.files[0];
+    const file = event.target.files?.[0];
 
     if (!file) {
       setSelectedFile(null);
       return;
     }
 
+    const allowedExtensions = [
+      ".txt",
+      ".pdf",
+      ".docx",
+      ".mp3",
+      ".wav",
+      ".m4a",
+    ];
+
+    const fileName = file.name.toLowerCase();
+
+    const isAllowed = allowedExtensions.some(
+      (extension) => fileName.endsWith(extension)
+    );
+
+    if (!isAllowed) {
+      setSelectedFile(null);
+
+      setError(
+        "Please select a TXT, PDF, DOCX, MP3, WAV, or M4A file."
+      );
+
+      return;
+    }
+
     setSelectedFile(file);
+
+    // Clear old results
     setError("");
+    setSummary("");
+    setKeyPoints([]);
+    setDecisions([]);
+    setActionItems([]);
+    setImportantDates([]);
     setAnswer("");
     setQuestionError("");
   };
 
   // ==============================
-  // Upload file
+  // Upload file to FastAPI
   // ==============================
   const uploadFile = async () => {
     if (!selectedFile) {
@@ -75,17 +217,53 @@ function App() {
     }
 
     const formData = new FormData();
+
     formData.append("file", selectedFile);
 
-    const response = await fetch(`${API_URL}/api/upload/`, {
-      method: "POST",
-      body: formData,
-    });
+    console.log(
+      "Uploading file:",
+      selectedFile.name
+    );
 
-    const data = await response.json();
+    const response = await fetch(
+      `${API_URL}/api/upload/`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
 
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || "File upload failed.");
+    let data;
+
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(
+        "FastAPI returned an invalid response."
+      );
+    }
+
+    console.log(
+      "FastAPI upload response:",
+      data
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        data.detail ||
+          data.error ||
+          data.message ||
+          "File upload failed."
+      );
+    }
+
+    if (data.success === false) {
+      throw new Error(
+        data.detail ||
+          data.error ||
+          data.message ||
+          "File upload and analysis failed."
+      );
     }
 
     return data;
@@ -99,94 +277,128 @@ function App() {
 
     setError("");
     setSummary("");
+    setKeyPoints([]);
+    setDecisions([]);
+    setActionItems([]);
+    setImportantDates([]);
     setAnswer("");
     setQuestionError("");
 
     if (!selectedFile && !transcript.trim()) {
       setError(
-        "Please upload a .txt transcript or paste transcript text."
+        "Please upload a TXT, PDF, DOCX, MP3, WAV, or M4A meeting file, or paste your meeting transcript."
       );
+
       return;
     }
 
     setLoading(true);
+    setMessage(
+      "AI is analyzing your meeting..."
+    );
+    setSuccess(false);
 
     try {
       let result;
 
-      // Pasted transcript
-      if (transcript.trim()) {
-        const response = await fetch(
-          `${API_URL}/api/meetings/summarize`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              transcript: transcript.trim(),
-            }),
-          }
-        );
-
-        result = await response.json();
-
-        if (!response.ok || !result.success) {
-          throw new Error(
-            result.error || "Meeting analysis failed."
-          );
-        }
-      }
-
+      // ==============================
       // Uploaded file
-      else {
-        if (
-          !selectedFile.name
-            .toLowerCase()
-            .endsWith(".txt")
-        ) {
-          throw new Error(
-            "Currently only .txt transcript files can be analyzed."
-          );
-        }
+      // ==============================
+      if (selectedFile) {
+        /*
+          FastAPI /api/upload/ handles:
 
-        const uploadResult = await uploadFile();
+          1. Saves the file
+          2. Extracts text
+          3. Cleans text
+          4. Sends it to AI
+          5. Returns the analysis
+        */
 
-        const response = await fetch(
-          `${API_URL}/api/meetings/summarize`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              filename: uploadResult.filename,
-            }),
-          }
+        result = await uploadFile();
+
+        console.log(
+          "Meeting analysis result:",
+          result
         );
 
-        result = await response.json();
+        setTranscript(
+          result.transcript || ""
+        );
 
-        if (!response.ok || !result.success) {
-          throw new Error(
-            result.error || "Meeting analysis failed."
-          );
-        }
+        setSummary(
+          result.summary ||
+            "No summary returned."
+        );
+
+        setKeyPoints(
+          Array.isArray(result.key_points)
+            ? result.key_points
+            : []
+        );
+
+        setDecisions(
+          Array.isArray(result.decisions)
+            ? result.decisions
+            : []
+        );
+
+        setActionItems(
+          Array.isArray(result.action_items)
+            ? result.action_items
+            : []
+        );
+
+        setImportantDates(
+          Array.isArray(
+            result.important_dates
+          )
+            ? result.important_dates
+            : []
+        );
+
+        setMessage(
+          "Meeting analyzed successfully."
+        );
+
+        setSuccess(true);
       }
 
-      setSummary(
-        result.summary || "No summary returned."
-      );
+      // ==============================
+      // Pasted transcript
+      // ==============================
+      else if (transcript.trim()) {
+        setError(
+          "Pasted transcript analysis is not connected to FastAPI yet. Please upload a TXT, PDF, DOCX, MP3, WAV, or M4A file."
+        );
 
-      setMessage("Meeting analyzed successfully.");
-      setSuccess(true);
+        setSuccess(false);
+
+        return;
+      }
+
+      // ==============================
+      // Scroll to summary
+      // ==============================
+      setTimeout(() => {
+        document
+          .getElementById("summary")
+          ?.scrollIntoView({
+            behavior: "smooth",
+          });
+      }, 200);
     } catch (err) {
-      console.error("Analyze error:", err);
+      console.error(
+        "Analyze error:",
+        err
+      );
 
       setError(
-        err.message || "Something went wrong."
+        err.message ||
+          "Something went wrong while analyzing the meeting."
       );
 
+      setMessage("Analysis failed.");
       setSuccess(false);
     } finally {
       setLoading(false);
@@ -194,105 +406,22 @@ function App() {
   };
 
   // ==============================
-  // Ask AI
+  // Clean text for speech
   // ==============================
-  const handleAskAI = async (event) => {
-    event.preventDefault();
-
-    setQuestionError("");
-    setAnswer("");
-
-    if (!question.trim()) {
-      setQuestionError("Please enter a question.");
-      return;
+  const cleanTextForSpeech = (text) => {
+    if (!text) {
+      return "";
     }
 
-    if (!transcript.trim() && !selectedFile) {
-      setQuestionError(
-        "Please enter or upload a meeting transcript first."
-      );
-      return;
-    }
-
-    setAsking(true);
-
-    try {
-      let result;
-
-      // Pasted transcript
-      if (transcript.trim()) {
-        const response = await fetch(
-          `${API_URL}/api/meetings/query`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              question: question.trim(),
-              transcript: transcript.trim(),
-            }),
-          }
-        );
-
-        result = await response.json();
-
-        if (!response.ok || !result.success) {
-          throw new Error(
-            result.error || "AI question failed."
-          );
-        }
-      }
-
-      // Uploaded txt file
-      else {
-        if (
-          !selectedFile.name
-            .toLowerCase()
-            .endsWith(".txt")
-        ) {
-          throw new Error(
-            "Ask AI currently supports .txt transcript files only."
-          );
-        }
-
-        const uploadResult = await uploadFile();
-
-        const response = await fetch(
-          `${API_URL}/api/meetings/query`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              question: question.trim(),
-              filename: uploadResult.filename,
-            }),
-          }
-        );
-
-        result = await response.json();
-
-        if (!response.ok || !result.success) {
-          throw new Error(
-            result.error || "AI question failed."
-          );
-        }
-      }
-
-      setAnswer(
-        result.answer || "No answer returned."
-      );
-    } catch (err) {
-      console.error("Ask AI error:", err);
-
-      setQuestionError(
-        err.message || "Unable to get AI answer."
-      );
-    } finally {
-      setAsking(false);
-    }
+    return text
+      .replace(/[*_`#]/g, "")
+      .replace(/\|/g, " ")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/^[-•●▪◦]\s*/gm, "")
+      .replace(/^\d+\.\s*/gm, "")
+      .replace(/^[-_=]{3,}$/gm, "")
+      .replace(/\s+/g, " ")
+      .trim();
   };
 
   // ==============================
@@ -300,21 +429,34 @@ function App() {
   // ==============================
   const speakSummary = () => {
     if (!summary) {
-      alert("Pehle meeting analyze karein.");
+      alert("Please analyze a meeting first.");
       return;
     }
 
     if (!("speechSynthesis" in window)) {
-      alert("Your browser does not support text-to-speech.");
+      alert(
+        "Your browser does not support text-to-speech."
+      );
       return;
     }
 
     window.speechSynthesis.cancel();
 
-    const speech = new SpeechSynthesisUtterance(summary);
+    const cleanSummary =
+      cleanTextForSpeech(summary);
+
+    if (!cleanSummary) {
+      alert("There is no readable summary.");
+      return;
+    }
+
+    const speech =
+      new SpeechSynthesisUtterance(
+        cleanSummary
+      );
 
     speech.lang = "en-US";
-    speech.rate = 1;
+    speech.rate = 0.9;
     speech.pitch = 1;
     speech.volume = 1;
 
@@ -326,7 +468,12 @@ function App() {
       setIsSpeaking(false);
     };
 
-    speech.onerror = () => {
+    speech.onerror = (event) => {
+      console.error(
+        "Speech synthesis error:",
+        event
+      );
+
       setIsSpeaking(false);
     };
 
@@ -345,337 +492,867 @@ function App() {
   };
 
   // ==============================
+  // Clear everything
+  // ==============================
+  const clearAll = () => {
+    setSelectedFile(null);
+    setTranscript("");
+    setSummary("");
+    setKeyPoints([]);
+    setDecisions([]);
+    setActionItems([]);
+    setImportantDates([]);
+    setQuestion("");
+    setAnswer("");
+    setError("");
+    setQuestionError("");
+
+    setMessage(
+      success
+        ? "Backend connected"
+        : "Checking backend..."
+    );
+
+    const fileInput =
+      document.getElementById(
+        "meeting-file"
+      );
+
+    if (fileInput) {
+      fileInput.value = "";
+    }
+
+    stopSpeaking();
+  };
+
+  // ==============================
+  // Professional list renderer
+  // ==============================
+  const renderList = (
+    items,
+    emptyText,
+    type = "default"
+  ) => {
+    if (!items || items.length === 0) {
+      return (
+        <p className="empty-list">
+          {emptyText}
+        </p>
+      );
+    }
+
+    return (
+      <div
+        className={`professional-list ${type}-list`}
+      >
+        {items.map((item, index) => {
+          if (
+            typeof item === "object" &&
+            item !== null
+          ) {
+            const task =
+              item.task ||
+              item.action ||
+              item.description ||
+              item.title ||
+              "Action item";
+
+            const owner =
+              item.owner ||
+              item.assignee ||
+              item.responsible ||
+              item.assigned_to ||
+              "Not assigned";
+
+            const deadline =
+              item.deadline ||
+              item.due_date ||
+              item.date ||
+              item.deadline_date ||
+              "No deadline";
+
+            return (
+              <div
+                className="professional-item"
+                key={index}
+              >
+                <div className="item-number">
+                  {index + 1}
+                </div>
+
+                <div className="item-content">
+                  <strong>{task}</strong>
+
+                  {type === "action" && (
+                    <div className="item-meta">
+                      <span>
+                        👤 {owner}
+                      </span>
+
+                      <span>
+                        📅 {deadline}
+                      </span>
+                    </div>
+                  )}
+
+                  {type !== "action" && (
+                    <p>
+                      {item.text ||
+                        item.value ||
+                        ""}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div
+              className="professional-item"
+              key={index}
+            >
+              <div className="item-number">
+                {index + 1}
+              </div>
+
+              <div className="item-content">
+                <strong>{item}</strong>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // ==============================
   // Page
   // ==============================
   return (
-    <div className="app-layout">
+    <div className="app">
 
       {/* Sidebar */}
       <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-logo">
+            AI
+          </div>
 
-        <div className="sidebar-header">
-          <div className="logo">
-            <span className="logo-icon">🤖</span>
-            AI Meeting Intelligence
+          <div>
+            <h2>Meeting AI</h2>
+
+            <span>
+              Intelligence Portal
+            </span>
           </div>
         </div>
 
-        <div className="sidebar-section">
-          <div className="section-header">
-            <h3>Meeting History</h3>
-          </div>
+        <nav className="nav-menu">
+          <a
+            href="#dashboard"
+            className="nav-item active"
+          >
+            <span>⌂</span>
+            Dashboard
+          </a>
 
-          <div className="history-list">
-            <div className="history-item active">
-              <div className="history-title">
-                Current Meeting
-              </div>
+          <a
+            href="#upload"
+            className="nav-item"
+          >
+            <span>↑</span>
+            Upload Meeting
+          </a>
 
-              <div className="history-date">
-                Today
-              </div>
+          <a
+            href="#summary"
+            className="nav-item"
+          >
+            <span>✦</span>
+            AI Summary
+          </a>
 
-              <div className="history-preview">
-                AI Meeting Intelligence session
-              </div>
-            </div>
-          </div>
-        </div>
+          <a
+            href="#ask-ai"
+            className="nav-item"
+          >
+            <span>◈</span>
+            Ask AI
+          </a>
+        </nav>
 
-        <div className="sidebar-footer">
-          <span
-            className={`health-status ${
-              success ? "online" : "offline"
+        <div className="sidebar-bottom">
+          <div
+            className={`connection-card ${
+              success
+                ? "online"
+                : "offline"
             }`}
           >
-            {success
-              ? "● Backend Online"
-              : "● Backend Offline"}
-          </span>
-        </div>
+            <span className="connection-dot"></span>
 
+            <div>
+              <strong>
+                {success
+                  ? "Backend Online"
+                  : "Backend Offline"}
+              </strong>
+
+              <small>
+                {message}
+              </small>
+            </div>
+          </div>
+
+          <div className="sidebar-footer">
+            AI Meeting Intelligence
+            <span>v1.0</span>
+          </div>
+        </div>
       </aside>
 
       {/* Main */}
-      <main className="main-content">
+      <main className="main">
 
-        <div className="top-bar">
-          <h1>AI Meeting Intelligence</h1>
+        {/* Topbar */}
+        <header className="topbar">
+          <div>
+            <span className="topbar-label">
+              AI WORKSPACE
+            </span>
 
-          <p className="subtitle">
-            Smart Meeting Analysis & Knowledge Assistant
-          </p>
-        </div>
+            <h1>
+              Meeting Intelligence
+            </h1>
+          </div>
 
-        {/* Backend */}
-        <div className="card">
-          <h2>Backend Connection</h2>
+          <div className="topbar-status">
+            <span
+              className={`live-dot ${
+                success ? "green" : ""
+              }`}
+            ></span>
 
-          <p>{message}</p>
+            {success
+              ? "System Connected"
+              : "Connecting..."}
+          </div>
+        </header>
 
-          {success && (
-            <p className="tts-speaking">
-              ✅ Frontend successfully connected to Flask backend!
+        {/* General error */}
+        {error && (
+          <div className="error-box">
+            <span>!</span>
+            {error}
+          </div>
+        )}
+
+        {/* Hero */}
+        <section
+          className="hero"
+          id="dashboard"
+        >
+          <div className="hero-content">
+            <span className="hero-badge">
+              ✦ AI-POWERED MEETING ASSISTANT
+            </span>
+
+            <h2>
+              Turn every meeting into
+              <span>
+                {" "}
+                actionable intelligence.
+              </span>
+            </h2>
+
+            <p>
+              Upload your meeting transcript,
+              let AI understand the conversation,
+              and instantly discover summaries,
+              decisions, action items and answers.
             </p>
-          )}
-        </div>
+
+            <div className="hero-actions">
+              <a
+                href="#upload"
+                className="hero-button"
+              >
+                Start Analyzing
+                <span>→</span>
+              </a>
+
+              <a
+                href="#ask-ai"
+                className="hero-secondary"
+              >
+                Ask AI
+              </a>
+            </div>
+          </div>
+
+          <div className="hero-visual">
+            <div className="orb orb-one"></div>
+            <div className="orb orb-two"></div>
+
+            <div className="ai-card">
+              <div className="ai-card-header">
+                <span className="ai-icon">
+                  ✦
+                </span>
+
+                <div>
+                  <strong>
+                    AI Analysis
+                  </strong>
+
+                  <small>
+                    Ready to process
+                  </small>
+                </div>
+
+                <span className="ai-check">
+                  ✓
+                </span>
+              </div>
+
+              <div className="ai-lines">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+
+              <div className="ai-mini-grid">
+                <div>
+                  <strong>
+                    Summary
+                  </strong>
+
+                  <small>
+                    Generated
+                  </small>
+                </div>
+
+                <div>
+                  <strong>
+                    Actions
+                  </strong>
+
+                  <small>
+                    Detected
+                  </small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Stats */}
+        <section className="stats">
+          <div className="stat-card">
+            <div className="stat-icon blue">
+              ↑
+            </div>
+
+            <div>
+              <span>
+                Meeting File
+              </span>
+
+              <strong>
+                {selectedFile
+                  ? selectedFile.name
+                  : "No file selected"}
+              </strong>
+            </div>
+          </div>
+
+          <div className="stat-card">
+            <div className="stat-icon purple">
+              ✦
+            </div>
+
+            <div>
+              <span>
+                AI Analysis
+              </span>
+
+              <strong>
+                {loading
+                  ? "Analyzing..."
+                  : summary
+                  ? "Completed"
+                  : "Ready"}
+              </strong>
+            </div>
+          </div>
+
+          <div className="stat-card">
+            <div className="stat-icon green">
+              ◈
+            </div>
+
+            <div>
+              <span>
+                AI Assistant
+              </span>
+
+              <strong>
+                {loading
+                  ? "Thinking..."
+                  : "Ready"}
+              </strong>
+            </div>
+          </div>
+        </section>
 
         {/* Upload */}
-        <div className="card">
+        <section
+          className="workspace-card"
+          id="upload"
+        >
+          <div className="section-heading">
+            <div>
+              <span className="step-label">
+                STEP 01
+              </span>
 
-          <h2>📁 Upload Meeting</h2>
+              <h2>
+                Upload Your Meeting
+              </h2>
 
-          <form onSubmit={handleAnalyze}>
-
-            <label>
-              <strong>Audio / Transcript File</strong>
-            </label>
-
-            <br />
-
-            <input
-              type="file"
-              accept=".txt,.pdf,.doc,.docx,.mp3,.wav,.m4a,.mp4"
-              onChange={handleFileChange}
-            />
-
-            {selectedFile && (
               <p>
-                Selected file:{" "}
-                <strong>{selectedFile.name}</strong>
+                Upload a TXT, PDF, DOCX, MP3,
+                WAV or M4A meeting file, or paste
+                your transcript below.
               </p>
-            )}
+            </div>
 
-            <br />
+            <div className="section-number">
+              01
+            </div>
+          </div>
 
-            <label>
-              <strong>Or paste transcript text</strong>
-            </label>
+          <div className="upload-grid">
+            <div className="upload-zone">
+              <input
+                id="meeting-file"
+                type="file"
+                accept=".txt,.pdf,.docx,.mp3,.wav,.m4a"
+                onChange={handleFileChange}
+              />
 
-            <textarea
-              value={transcript}
-              onChange={(e) =>
-                setTranscript(e.target.value)
-              }
-              placeholder="Paste your meeting transcript here..."
-              rows="8"
-              style={{
-                width: "100%",
-                marginTop: "10px",
-                padding: "12px",
-                boxSizing: "border-box",
-              }}
-            />
-
-            {error && (
-              <p
-                style={{
-                  color: "red",
-                  marginTop: "10px",
-                }}
+              <label
+                htmlFor="meeting-file"
+                className="upload-label"
               >
-                ❌ {error}
-              </p>
-            )}
+                <div className="upload-circle">
+                  ↑
+                </div>
 
+                <h3>
+                  Upload Meeting File
+                </h3>
+
+                <p>
+                  Click to browse TXT, PDF, DOCX,
+                  MP3, WAV or M4A files
+                </p>
+
+                <span className="browse-button">
+                  Browse Files
+                </span>
+
+                {selectedFile && (
+                  <div className="selected-file">
+                    ✓ {selectedFile.name}
+                  </div>
+                )}
+              </label>
+            </div>
+
+            <div className="transcript-area">
+              <div className="input-title">
+                <span>✎</span>
+                Or paste transcript
+              </div>
+
+              <textarea
+                value={transcript}
+                onChange={(event) =>
+                  setTranscript(
+                    event.target.value
+                  )
+                }
+                placeholder="Paste your meeting transcript here..."
+              />
+
+              <div className="character-count">
+                {transcript.length} characters
+              </div>
+            </div>
+          </div>
+
+          <div className="action-row">
             <button
-              type="submit"
-              className="btn btn-primary"
+              type="button"
+              className="primary-button"
+              onClick={handleAnalyze}
               disabled={loading}
-              style={{
-                marginTop: "15px",
-              }}
             >
-              {loading
-                ? "⏳ Analyzing..."
-                : "🚀 Upload & Analyze"}
+              {loading ? (
+                <>
+                  <span className="button-spinner"></span>
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  ✦ Analyze Meeting
+                </>
+              )}
             </button>
 
-          </form>
-        </div>
+            <button
+              type="button"
+              className="clear-button"
+              onClick={clearAll}
+              disabled={loading}
+            >
+              Clear
+            </button>
+          </div>
+        </section>
 
         {/* Summary */}
-        <div className="card result-card">
+        <section
+          className="workspace-card"
+          id="summary"
+        >
+          <div className="section-heading">
+            <div>
+              <span className="step-label">
+                STEP 02
+              </span>
 
-          <h2>📝 AI Meeting Summary</h2>
+              <h2>
+                AI Meeting Summary
+              </h2>
 
-          <div className="summary-content">
-
-            {summary ? (
-              <pre
-                className="summary-text"
-                style={{
-                  whiteSpace: "pre-wrap",
-                  fontFamily: "inherit",
-                  margin: 0,
-                }}
-              >
-                {summary}
-              </pre>
-            ) : (
-              <p className="empty-state">
-                Meeting summary will appear here after processing your meeting.
+              <p>
+                Your AI-generated meeting
+                intelligence will appear here.
               </p>
-            )}
+            </div>
 
+            <div className="section-number">
+              02
+            </div>
           </div>
 
-          <div className="tts-controls">
+          {loading && (
+            <div className="loading-state">
+              <div className="loading-spinner"></div>
 
-            <button
-              type="button"
-              className="btn btn-speak"
-              onClick={speakSummary}
-              disabled={!summary}
-            >
-              🔊 Read Summary
-            </button>
+              <h3>
+                AI is analyzing your meeting
+              </h3>
 
-            <button
-              type="button"
-              className="btn btn-stop-speech"
-              onClick={stopSpeaking}
-              disabled={!isSpeaking}
-            >
-              ⏹ Stop
-            </button>
-
-          </div>
-
-          {isSpeaking && (
-            <p className="tts-speaking">
-              🔊 Reading aloud...
-            </p>
+              <p>
+                Extracting the most important
+                information...
+              </p>
+            </div>
           )}
 
-        </div>
+          {!loading && !summary && (
+            <div className="empty-state">
+              <div className="empty-icon">
+                ✦
+              </div>
 
-        {/* Meeting Intelligence */}
-        <div className="results-section">
+              <h3>
+                Your meeting insights will
+                appear here
+              </h3>
 
-          <h2 className="meeting-title">
-            Meeting Intelligence
-          </h2>
-
-          <div className="results-grid">
-
-            <div className="card result-card">
-              <h3>📌 Key Discussion Points</h3>
-
-              <p className="empty-state">
-                Key discussion points are included in the AI summary.
+              <p>
+                Upload a transcript or paste
+                your meeting text, then click
+                Analyze Meeting.
               </p>
             </div>
+          )}
 
-            <div className="card result-card">
-              <h3>✅ Important Decisions</h3>
+          {!loading && summary && (
+            <div className="summary-wrapper">
+              <div className="summary-toolbar">
+                <span>
+                  ✦ AI Generated Analysis
+                </span>
 
-              <p className="empty-state">
-                Important decisions are included in the AI summary.
-              </p>
+                <div>
+                  {!isSpeaking ? (
+                    <button
+                      type="button"
+                      className="small-button"
+                      onClick={speakSummary}
+                    >
+                      🔊 Read Summary
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="stop-button"
+                      onClick={stopSpeaking}
+                    >
+                      ■ Stop
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="summary-result">
+                {summary}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Intelligence cards */}
+        {summary && (
+          <section className="insights-grid">
+
+            {/* Key Points */}
+            <div className="insight-card">
+              <span className="insight-icon">
+                📌
+              </span>
+
+              <div>
+                <h3>
+                  Key Discussion Points
+                </h3>
+
+                <p>
+                  Important topics identified
+                  by AI.
+                </p>
+
+                {renderList(
+                  keyPoints,
+                  "No key discussion points found.",
+                  "key-point"
+                )}
+              </div>
             </div>
 
-            <div className="card result-card">
-              <h3>📋 Action Items</h3>
+            {/* Decisions */}
+            <div className="insight-card">
+              <span className="insight-icon">
+                ✓
+              </span>
 
-              <p className="empty-state">
-                Action items are included in the AI summary.
-              </p>
+              <div>
+                <h3>
+                  Important Decisions
+                </h3>
+
+                <p>
+                  Decisions extracted from
+                  the meeting.
+                </p>
+
+                {renderList(
+                  decisions,
+                  "No decisions found.",
+                  "decision"
+                )}
+              </div>
             </div>
 
-            <div className="card result-card">
-              <h3>📅 Dates & Deadlines</h3>
+            {/* Action Items */}
+            <div className="insight-card">
+              <span className="insight-icon">
+                ☑
+              </span>
 
-              <p className="empty-state">
-                Dates and deadlines are included in the AI summary.
-              </p>
+              <div>
+                <h3>
+                  Action Items
+                </h3>
+
+                <p>
+                  Tasks and responsibilities
+                  identified.
+                </p>
+
+                {renderList(
+                  actionItems,
+                  "No action items found.",
+                  "action"
+                )}
+              </div>
             </div>
 
-          </div>
+            {/* Important Dates */}
+            <div className="insight-card">
+              <span className="insight-icon">
+                ◷
+              </span>
 
-        </div>
+              <div>
+                <h3>
+                  Dates & Deadlines
+                </h3>
+
+                <p>
+                  Important dates found in
+                  the meeting.
+                </p>
+
+                {renderList(
+                  importantDates,
+                  "No important dates found.",
+                  "date"
+                )}
+              </div>
+            </div>
+
+          </section>
+        )}
 
         {/* Ask AI */}
-        <div className="card chat-card">
+        <section
+          className="workspace-card"
+          id="ask-ai"
+        >
+          <div className="section-heading">
+            <div>
+              <span className="step-label">
+                STEP 03
+              </span>
 
-          <h2>
-            💬 Ask about this Meeting
-          </h2>
+              <h2>
+                Ask AI About Your Meeting
+              </h2>
 
-          <p className="chat-hint">
-            Ask questions about your meeting.
-          </p>
-
-          <div className="chat-messages">
-
-            <div className="chat-bubble chat-ai">
-
-              <div className="chat-role">
-                AI Assistant
-              </div>
-
-              <div className="chat-content">
-                Hello! I can help you understand your meeting.
-              </div>
-
+              <p>
+                Ask questions and get intelligent
+                answers based on your meeting.
+              </p>
             </div>
 
-            {answer && (
-              <div className="chat-bubble chat-ai">
-
-                <div className="chat-role">
-                  AI Assistant
-                </div>
-
-                <div className="chat-content">
-                  {answer}
-                </div>
-
-              </div>
-            )}
-
+            <div className="section-number">
+              03
+            </div>
           </div>
 
-          <form
-            onSubmit={handleAskAI}
-            className="chat-input-row"
-          >
-
-            <input
-              type="text"
-              className="question-input"
-              value={question}
-              onChange={(e) =>
-                setQuestion(e.target.value)
-              }
-              placeholder="Ask something about the meeting..."
-              disabled={asking}
-            />
-
+          <div className="question-examples">
             <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={asking}
+              type="button"
+              onClick={() =>
+                setQuestion(
+                  "What decisions were made during the meeting?"
+                )
+              }
             >
-              {asking
-                ? "⏳ Asking..."
-                : "Ask AI"}
+              What decisions were made?
             </button>
 
+            <button
+              type="button"
+              onClick={() =>
+                setQuestion(
+                  "Who is responsible for the action items?"
+                )
+              }
+            >
+              Who has action items?
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                setQuestion(
+                  "What are the important deadlines?"
+                )
+              }
+            >
+              What are the deadlines?
+            </button>
+          </div>
+
+          <form onSubmit={handleAskAI}>
+            <div className="ask-box">
+              <input
+                type="text"
+                value={question}
+                onChange={(event) =>
+                  setQuestion(
+                    event.target.value
+                  )
+                }
+                placeholder="Ask anything about this meeting..."
+              />
+
+              <button
+                type="submit"
+                disabled={asking}
+              >
+                {asking
+                  ? "Thinking..."
+                  : "Ask AI →"}
+              </button>
+            </div>
           </form>
 
           {questionError && (
-            <p
-              style={{
-                color: "red",
-                marginTop: "10px",
-              }}
-            >
-              ❌ {questionError}
-            </p>
+            <div className="error-box">
+              <span>!</span>
+              {questionError}
+            </div>
           )}
 
-        </div>
+          {answer && (
+            <div className="answer-card">
+              <div className="answer-title">
+                <span>✦</span>
+
+                <div>
+                  <strong>
+                    AI Assistant
+                  </strong>
+
+                  <small>
+                    Based on your meeting
+                  </small>
+                </div>
+              </div>
+
+              <div className="answer-text">
+                {answer}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Footer */}
+        <footer className="footer">
+          <div>
+            <strong>
+              AI Meeting Intelligence
+            </strong>
+
+            <span>
+              Transform meetings into
+              actionable insights.
+            </span>
+          </div>
+
+          <div>
+            FastAPI · React · Groq AI
+          </div>
+        </footer>
 
       </main>
     </div>

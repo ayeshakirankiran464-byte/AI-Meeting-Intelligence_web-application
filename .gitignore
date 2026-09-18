@@ -1,4 +1,4 @@
-# Environment variables
+# Environment / API keys
 .env
 .env.*
 !.env.example
@@ -9,12 +9,12 @@ __pycache__/
 .venv/
 venv/
 
-# Node
+# Node / React
 node_modules/
 dist/
-build/
+.vite/
 
-# Flask uploads
+# Runtime uploaded files
 uploads/
 
 # Logs

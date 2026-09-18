@@ -1,12 +1,31 @@
+
 import os
-from flask import Blueprint, request, jsonify
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
 from config.config import Config
 from services.llm_service import llm_service
 
-meeting_bp = Blueprint("meeting", __name__)
+
+meeting_router = APIRouter(
+    prefix="/api/meetings",
+    tags=["Meetings"]
+)
 
 
-def load_transcript(filename):
+class MeetingRequest(BaseModel):
+    transcript: str | None = None
+    filename: str | None = None
+
+
+class QueryRequest(BaseModel):
+    question: str
+    transcript: str | None = None
+    filename: str | None = None
+
+
+def load_transcript(filename: str):
     folder = Config.UPLOAD_FOLDER
     name = os.path.basename(filename)
 
@@ -16,60 +35,81 @@ def load_transcript(filename):
     if os.path.isfile(txt_path):
         with open(txt_path, "r", encoding="utf-8") as f:
             return f.read()
+
     return None
 
 
-@meeting_bp.route("/", methods=["GET"])
+@meeting_router.get("/")
 def list_meetings():
     folder = Config.UPLOAD_FOLDER
     os.makedirs(folder, exist_ok=True)
 
     files = []
+
     for name in os.listdir(folder):
         path = os.path.join(folder, name)
+
         if os.path.isfile(path):
-            files.append({"filename": name, "size": os.path.getsize(path)})
+            files.append({
+                "filename": name,
+                "size": os.path.getsize(path)
+            })
 
-    return jsonify({"success": True, "files": files})
+    return {
+        "success": True,
+        "files": files
+    }
 
 
-@meeting_bp.route("/summarize", methods=["POST"])
-def summarize():
-    data = request.get_json(silent=True) or {}
-    transcript = data.get("transcript")
-    filename = data.get("filename")
+@meeting_router.post("/summarize")
+def summarize(data: MeetingRequest):
 
-    if not transcript and filename:
-        transcript = load_transcript(filename)
+    transcript = data.transcript
+
+    if not transcript and data.filename:
+        transcript = load_transcript(data.filename)
 
     if not transcript:
-        return jsonify({
-            "success": False,
-            "error": "Send transcript, or filename of the .txt file in uploads"
-        }), 400
+        raise HTTPException(
+            status_code=400,
+            detail="Send transcript, or filename of the .txt file in uploads"
+        )
 
     summary = llm_service.summarize_meeting(transcript)
-    return jsonify({"success": True, "summary": summary})
+
+    return {
+        "success": True,
+        "summary": summary
+    }
 
 
-@meeting_bp.route("/query", methods=["POST"])
-def query_meeting():
-    data = request.get_json(silent=True) or {}
-    question = data.get("question")
-    transcript = data.get("transcript")
-    filename = data.get("filename")
+@meeting_router.post("/query")
+def query_meeting(data: QueryRequest):
 
-    if not question:
-        return jsonify({"success": False, "error": "question is required"}), 400
+    transcript = data.transcript
 
-    if not transcript and filename:
-        transcript = load_transcript(filename)
+    if not data.question:
+        raise HTTPException(
+            status_code=400,
+            detail="question is required"
+        )
+
+    if not transcript and data.filename:
+        transcript = load_transcript(data.filename)
 
     if not transcript:
-        return jsonify({
-            "success": False,
-            "error": "Send transcript, or filename of the .txt file in uploads"
-        }), 400
+        raise HTTPException(
+            status_code=400,
+            detail="Send transcript, or filename of the .txt file in uploads"
+        )
 
-    answer = llm_service.answer_query(transcript, question)
-    return jsonify({"success": True, "answer": answer})
+    answer = llm_service.answer_query(
+        transcript,
+        data.question
+    )
+
+    return {
+        "success": True,
+        "answer": answer
+    }
+

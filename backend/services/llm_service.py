@@ -88,3 +88,46 @@ Give a clear and concise answer.
 
 # Create global LLM service instance
 llm_service = LLMService()
+
+# Create global LLM service instance
+llm_service = LLMService()
+
+def ask_meeting_question(
+    question: str,
+    transcript: str
+) -> str:
+    """
+    Answer a user's question using the meeting transcript as context.
+    """
+
+    prompt = f"""
+You are an AI meeting assistant.
+
+Answer the user's question using ONLY the meeting transcript provided below.
+
+If the answer is not available in the transcript, clearly say:
+"I could not find that information in the meeting transcript."
+
+Give a short, direct, professional answer.
+
+Rules:
+- Answer in 2 to 5 sentences.
+- Use plain text only.
+- Do not use Markdown.
+- Do not use #, ##, ###, *, bullets, or numbered lists.
+- Do not repeat the question.
+- Mention only information relevant to the question.
+
+MEETING TRANSCRIPT:
+{transcript}
+
+USER QUESTION:
+{question}
+
+ANSWER:
+"""
+
+    return llm_service.generate_with_groq(
+        prompt,
+        model="openai/gpt-oss-120b"
+    )
